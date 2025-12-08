@@ -605,6 +605,31 @@ bootstrap_system() {
         void-repo-nonfree
     )
 
+    # GUI packages (Hyprland + Wayland)
+    local GUI_PKGS=(
+        hyprland
+        waybar
+        wofi
+        alacritty
+        wl-clipboard
+        xorg-xwayland
+        mako
+        swaylock
+        swayidle
+        swaybg
+        brightnessctl
+        pavucontrol-qt
+        pipewire
+        pipewire-pulse
+        wireplumber
+        bluez
+        bluez-utils
+        font-liberation
+        noto-fonts
+        noto-fonts-cjk
+        noto-fonts-emoji
+    )
+
     if [[ "${LIBC_TYPE:-glibc}" == "musl" ]]; then
         info "Detected musl host; adjusting base packages for musl environment"
         # musl systems don't need glibc-locales; add musl-locales if available
@@ -614,14 +639,17 @@ bootstrap_system() {
         BASE_PKGS+=(glibc-locales)
     fi
 
-    # Bootstrap core system with crypto support
-    log "Installing base system with crypto support"
+    # Add GUI packages to base
+    BASE_PKGS+=("${GUI_PKGS[@]}")
+
+    # Bootstrap core system with crypto support and GUI
+    log "Installing base system with crypto support and Hyprland GUI"
     xbps-install -Sy -r /mnt -R "$REPO_URL" "${BASE_PKGS[@]}" || error "Bootstrap failed"
 
     # Copy network config
     cp -L /etc/resolv.conf /mnt/etc/ 2>/dev/null || warn "Could not copy resolv.conf"
 
-    success "Bootstrap phase complete"
+    success "Bootstrap phase complete (with Hyprland GUI)"
     save_state "BOOTSTRAPPED"
 }
 
@@ -760,6 +788,152 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 log "Regenerating initramfs"
 xbps-reconfigure -fa
+
+log "Configuring Hyprland and Wayland"
+# Create default Hyprland config directory for the user
+mkdir -p /home/\${USERNAME}/.config/hypr
+cat > /home/\${USERNAME}/.config/hypr/hyprland.conf << 'HYPR_EOF'
+# Hyprland Configuration
+monitor=,preferred,auto,1
+
+exec-once = waybar & mako & swayidle -w before-sleep swaylock
+
+input {
+    kb_layout = us
+    kb_variant =
+    kb_model =
+    kb_options =
+    kb_rules =
+    follow_mouse = 1
+    touchpad {
+        natural_scroll = false
+    }
+    sensitivity = 0
+}
+
+general {
+    gaps_in = 5
+    gaps_out = 20
+    border_size = 2
+    col.active_border = 0xff00ffff
+    col.inactive_border = 0xff222222
+    layout = dwindle
+}
+
+decoration {
+    rounding = 10
+    blur = true
+    blur_size = 3
+    blur_passes = 1
+    drop_shadow = true
+    shadow_range = 4
+    shadow_render_power = 3
+    col.shadow = rgba(1a1a1aee)
+}
+
+animations {
+    enabled = true
+    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
+    animation = windows, 1, 10, myBezier
+    animation = windowsOut, 1, 10, default, popin 80%
+    animation = border, 1, 10, default
+    animation = borderangle, 1, 10, default
+    animation = fade, 1, 10, default
+    animation = workspaces, 1, 6, default
+}
+
+dwindle {
+    pseudotile = true
+    preserve_split = true
+}
+
+master {
+    new_is_master = true
+}
+
+gestures {
+    workspace_swipe = false
+}
+
+# Keybindings
+$mod = SUPER
+
+bind = $mod, Return, exec, alacritty
+bind = $mod, Q, killactive,
+bind = $mod, M, exit,
+bind = $mod, E, exec, wofi --show drun
+bind = $mod, F, fullscreen, 0
+
+bind = $mod, left, movefocus, l
+bind = $mod, right, movefocus, r
+bind = $mod, up, movefocus, u
+bind = $mod, down, movefocus, d
+
+bind = $mod SHIFT, left, movewindow, l
+bind = $mod SHIFT, right, movewindow, r
+bind = $mod SHIFT, up, movewindow, u
+bind = $mod SHIFT, down, movewindow, d
+
+bind = $mod, 1, workspace, 1
+bind = $mod, 2, workspace, 2
+bind = $mod, 3, workspace, 3
+bind = $mod, 4, workspace, 4
+bind = $mod, 5, workspace, 5
+
+bind = $mod SHIFT, 1, movetoworkspace, 1
+bind = $mod SHIFT, 2, movetoworkspace, 2
+bind = $mod SHIFT, 3, movetoworkspace, 3
+bind = $mod SHIFT, 4, movetoworkspace, 4
+bind = $mod SHIFT, 5, movetoworkspace, 5
+
+bind = $mod, mouse_down, workspace, e+1
+bind = $mod, mouse_up, workspace, e-1
+HYPR_EOF
+
+chown -R \${USERNAME}:\${USERNAME} /home/\${USERNAME}/.config
+
+# Setup waybar config
+mkdir -p /home/\${USERNAME}/.config/waybar
+cat > /home/\${USERNAME}/.config/waybar/config << 'WAYBAR_EOF'
+{
+    "layer": "top",
+    "position": "top",
+    "modules-left": ["hyprland/workspaces"],
+    "modules-center": ["hyprland/window"],
+    "modules-right": ["pulseaudio", "network", "clock"],
+    "hyprland/window": {
+        "format": "{}"
+    },
+    "clock": {
+        "format": "{:%H:%M}"
+    },
+    "pulseaudio": {
+        "format": "🔊 {volume}%"
+    },
+    "network": {
+        "format-wifi": "📶 {essid}",
+        "format-disconnected": "⚠️  Disconnected"
+    }
+}
+WAYBAR_EOF
+
+chown -R \${USERNAME}:\${USERNAME} /home/\${USERNAME}/.config/waybar
+
+# Add .bashrc config for Wayland/Hyprland
+cat >> /home/\${USERNAME}/.bashrc << 'BASHRC_EOF'
+
+# Wayland/Hyprland setup
+if [ -z "\$DISPLAY" ] && [ "\$XDG_VTNR" = "1" ]; then
+    export XDG_SESSION_TYPE=wayland
+    export QT_QPA_PLATFORM=wayland
+    export SDL_VIDEODRIVER=wayland
+    exec Hyprland
+fi
+BASHRC_EOF
+
+chown \${USERNAME}:\${USERNAME} /home/\${USERNAME}/.bashrc
+
+log "Hyprland and Wayland configured"
 
 log "System configuration complete!"
 SCRIPT_EOF
